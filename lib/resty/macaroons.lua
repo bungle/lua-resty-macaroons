@@ -23,11 +23,11 @@ enum macaroon_returncode {
 };
          struct macaroon* macaroon_create(const unsigned char* location, size_t location_sz, const unsigned char* key, size_t key_sz, const unsigned char* id, size_t id_sz, enum macaroon_returncode* err);
                      void macaroon_destroy(struct macaroon* M);
-// TODO: implement binding: int macaroon_validate(const struct macaroon* M);
+                      int macaroon_validate(const struct macaroon* M);
          struct macaroon* macaroon_add_first_party_caveat(const struct macaroon* M, const unsigned char* predicate, size_t predicate_sz, enum macaroon_returncode* err);
          struct macaroon* macaroon_add_third_party_caveat(const struct macaroon* M, const unsigned char* location, size_t location_sz, const unsigned char* key, size_t key_sz, const unsigned char* id, size_t id_sz, enum macaroon_returncode* err);
-// TODO: implement binding: unsigned macaroon_num_third_party_caveats(const struct macaroon* M);
-// TODO: implement binding: int macaroon_third_party_caveat(const struct macaroon* M, unsigned which, const unsigned char** location, size_t* location_sz, const unsigned char** identifier, size_t* identifier_sz);
+                 unsigned macaroon_num_third_party_caveats(const struct macaroon* M);
+                      int macaroon_third_party_caveat(const struct macaroon* M, unsigned which, const unsigned char** location, size_t* location_sz, const unsigned char** identifier, size_t* identifier_sz);
 // TODO: implement binding: struct macaroon* macaroon_prepare_for_request(const struct macaroon* M, const struct macaroon* D, enum macaroon_returncode* err);
 struct macaroon_verifier* macaroon_verifier_create();
                      void macaroon_verifier_destroy(struct macaroon_verifier* V);
@@ -49,8 +49,10 @@ struct macaroon_verifier* macaroon_verifier_create();
 local lib = ffi_load "macaroons"
 
 local rc = ffi_new "enum macaroon_returncode[1]"
-local cp = ffi_new "const char*[1]"
+local cp = ffi_new "const unsigned char*[1]"
+local ip = ffi_new "const unsigned char*[1]"
 local sz = ffi_new "size_t[1]"
+local iz = ffi_new "size_t[1]"
 local char_t = ffi_typeof "char[?]"
 
 local verifier = {}
@@ -90,7 +92,18 @@ function macaroons:__index(k)
     elseif k == "signature" then
         lib.macaroon_signature(self.context, cp, sz)
         return ffi_str(cp[0], sz[0])
-
+    elseif k == "third_party_caveats" then
+        local n = lib.macaroon_num_third_party_caveats(self.context)
+        local t = {}
+        if n > 0 then
+            for i = 0, n - 1 do
+                if lib.macaroon_third_party_caveat(self.context, i, cp, sz, ip, iz) ~= 0 then
+                    return nil, "TODO: error message"
+                end
+                t[i+1] = { location = ffi_str(cp[0], sz[0]), id = ffi_str(ip[0], iz[0]) }
+            end
+        end
+        return t
     else
         return macaroons[k]
     end
@@ -141,6 +154,10 @@ function macaroons:add_third_party_caveat(location, key, id)
     -- TODO: error checking
     return setmetatable({ context = ffi_gc(lib.macaroon_add_third_party_caveat(self.context, location, #location, key, #key, id, #id, rc), lib.macaroon_verifier_destroy) }, macaroons)
 
+end
+
+function macaroons:validate()
+    return lib.macaroon_validate(self.context) == 0
 end
 
 return macaroons
