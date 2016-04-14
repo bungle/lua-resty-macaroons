@@ -5,6 +5,7 @@ local ffi_gc       = ffi.gc
 local ffi_new      = ffi.new
 local ffi_str      = ffi.string
 local ffi_typeof   = ffi.typeof
+local select       = select
 local setmetatable = setmetatable
 
 ffi_cdef[[
@@ -28,7 +29,7 @@ enum macaroon_returncode {
          struct macaroon* macaroon_add_third_party_caveat(const struct macaroon* M, const unsigned char* location, size_t location_sz, const unsigned char* key, size_t key_sz, const unsigned char* id, size_t id_sz, enum macaroon_returncode* err);
                  unsigned macaroon_num_third_party_caveats(const struct macaroon* M);
                       int macaroon_third_party_caveat(const struct macaroon* M, unsigned which, const unsigned char** location, size_t* location_sz, const unsigned char** identifier, size_t* identifier_sz);
-// TODO: implement binding: struct macaroon* macaroon_prepare_for_request(const struct macaroon* M, const struct macaroon* D, enum macaroon_returncode* err);
+         struct macaroon* macaroon_prepare_for_request(const struct macaroon* M, const struct macaroon* D, enum macaroon_returncode* err);
 struct macaroon_verifier* macaroon_verifier_create();
                      void macaroon_verifier_destroy(struct macaroon_verifier* V);
                       int macaroon_verifier_satisfy_exact(struct macaroon_verifier* V, const unsigned char* predicate, size_t predicate_sz, enum macaroon_returncode* err);
@@ -53,16 +54,27 @@ local cp = ffi_new "const unsigned char*[1]"
 local ip = ffi_new "const unsigned char*[1]"
 local sz = ffi_new "size_t[1]"
 local iz = ffi_new "size_t[1]"
+local mcrn_t = ffi_typeof "struct macaroon*[?]"
 local char_t = ffi_typeof "char[?]"
 
 local verifier = {}
 
 verifier.__index = verifier
 
--- TODO: optional arguments not implemented
-function verifier:verify(macaroon, key)
-    if lib.macaroon_verify(self.context, macaroon.context, key, #key, nil, 0, rc) ~= 0 then
-        return nil, "TODO: error message"
+function verifier:verify(macaroon, key, ...)
+    local n = select("#", ...)
+    if n == 0 then
+        if lib.macaroon_verify(self.context, macaroon.context, key, #key, nil, 0, rc) ~= 0 then
+            return nil, "TODO: error message"
+        end
+    else
+        local ms = ffi_new(mcrn_t, n)
+        for i=1, n do
+            ms[i-1] = select(i, ...).context
+        end
+        if lib.macaroon_verify(self.context, macaroon.context, key, #key, ms, n, rc) ~= 0 then
+            return nil, "TODO: error message"
+        end
     end
     if rc[0] ~= 0 and rc[0] ~= lib.MACAROON_SUCCESS then
         return nil, "TODO: error message"
@@ -147,13 +159,18 @@ end
 
 function macaroons:add_first_party_caveat(predicate)
     -- TODO: error checking
-    return setmetatable({ context = ffi_gc(lib.macaroon_add_first_party_caveat(self.context, predicate, #predicate, rc), lib.macaroon_verifier_destroy) }, macaroons)
+    return setmetatable({ context = ffi_gc(lib.macaroon_add_first_party_caveat(self.context, predicate, #predicate, rc), lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons:add_third_party_caveat(location, key, id)
     -- TODO: error checking
-    return setmetatable({ context = ffi_gc(lib.macaroon_add_third_party_caveat(self.context, location, #location, key, #key, id, #id, rc), lib.macaroon_verifier_destroy) }, macaroons)
+    return setmetatable({ context = ffi_gc(lib.macaroon_add_third_party_caveat(self.context, location, #location, key, #key, id, #id, rc), lib.macaroon_destroy) }, macaroons)
 
+end
+
+function macaroons:prepare_for_request(d)
+    -- TODO: error checking
+    return setmetatable({ context = ffi_gc(lib.macaroon_prepare_for_request(self.context, d.context, rc), lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons:validate()
