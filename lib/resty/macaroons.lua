@@ -7,6 +7,7 @@ local ffi_str      = ffi.string
 local ffi_typeof   = ffi.typeof
 local select       = select
 local setmetatable = setmetatable
+local tonumber     = tonumber
 
 ffi_cdef[[
 struct macaroon;
@@ -56,38 +57,70 @@ local sz = ffi_new "size_t[1]"
 local iz = ffi_new "size_t[1]"
 local mcrn_t = ffi_typeof "struct macaroon*[?]"
 local char_t = ffi_typeof "char[?]"
+local errors = {}
+errors[lib.MACAROON_OUT_OF_MEMORY]    = "Out of memory"
+errors[lib.MACAROON_HASH_FAILED]      = "Hash failed"
+errors[lib.MACAROON_INVALID]          = "Invalid"
+errors[lib.MACAROON_TOO_MANY_CAVEATS] = "Too many caveats"
+errors[lib.MACAROON_CYCLE]            = "Cycle"
+errors[lib.MACAROON_BUF_TOO_SMALL]    = "Buffer too small"
+errors[lib.MACAROON_NOT_AUTHORIZED]   = "Not authorized"
+errors[lib.MACAROON_NO_JSON_SUPPORT]  = "No JSON support"
 
 local verifier = {}
-
 verifier.__index = verifier
 
 function verifier:verify(macaroon, key, ...)
     local n = select("#", ...)
     if n == 0 then
-        if lib.macaroon_verify(self.context, macaroon.context, key, #key, nil, 0, rc) ~= 0 then
-            return nil, "TODO: error message"
+        local s = lib.macaroon_verify(self.context, macaroon.context, key, #key, nil, 0, rc)
+        local r = tonumber(rc[0])
+        rc[0] = lib.MACAROON_SUCCESS
+        if s ~= 0 then
+            if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+                return nil, errors[r] or "Verify failed"
+            else
+                return nil, "Verify failed"
+            end
+        end
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or r
         end
     else
         local ms = ffi_new(mcrn_t, n)
         for i=1, n do
             ms[i-1] = select(i, ...).context
         end
-        if lib.macaroon_verify(self.context, macaroon.context, key, #key, ms, n, rc) ~= 0 then
-            return nil, "TODO: error message"
+        local s = lib.macaroon_verify(self.context, macaroon.context, key, #key, ms, n, rc)
+        local r = tonumber(rc[0])
+        rc[0] = lib.MACAROON_SUCCESS
+        if s ~= 0 then
+            if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+                return nil, errors[r] or "Verify failed"
+            else
+                return nil, "Verify failed"
+            end
         end
-    end
-    if rc[0] ~= 0 and rc[0] ~= lib.MACAROON_SUCCESS then
-        return nil, "TODO: error message"
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or r
+        end
     end
     return true
 end
 
 function verifier:satisfy_exact(predicate)
-    if lib.macaroon_verifier_satisfy_exact(self.context, predicate, #predicate, rc) ~= 0 then
-        return nil, "TODO: error message"
+    local s = lib.macaroon_verifier_satisfy_exact(self.context, predicate, #predicate, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if s ~= 0 then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Verifier unsatisfied error"
+        else
+            return nil, "Verifier unsatisfied error"
+        end
     end
-    if rc[0] ~= 0 and rc[0] ~= lib.MACAROON_SUCCESS then
-        return nil, "TODO: error message"
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
     end
     return self
 end
@@ -109,8 +142,9 @@ function macaroons:__index(k)
         local t = {}
         if n > 0 then
             for i = 0, n - 1 do
-                if lib.macaroon_third_party_caveat(self.context, i, cp, sz, ip, iz) ~= 0 then
-                    return nil, "TODO: error message"
+                local s = lib.macaroon_third_party_caveat(self.context, i, cp, sz, ip, iz)
+                if s ~= 0 then
+                    return nil, errors[s] or s
                 end
                 t[i+1] = { location = ffi_str(cp[0], sz[0]), id = ffi_str(ip[0], iz[0]) }
             end
@@ -122,30 +156,63 @@ function macaroons:__index(k)
 end
 
 function macaroons.create(location, key, id)
-    local context = ffi_gc(lib.macaroon_create(location, #location, key, #key, id, #id, rc), lib.macaroon_destroy)
-    if rc[0] ~= 0 and rc[0] ~= lib.MACAROON_SUCCESS then
-        return nil, "TODO: error message"
+    local context = lib.macaroon_create(location, #location, key, #key, id, #id, rc)
+    local r = tonumber(rc[0])
+    rc[0] = 0
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Unable to create macaroon"
+        else
+            return nil, "Unable to create macaroon"
+        end
     end
-    return setmetatable({ context = context }, macaroons)
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons.deserialize(data)
-    local context = ffi_gc(lib.macaroon_deserialize(data, rc), lib.macaroon_destroy)
-    if rc[0] ~= lib.MACAROON_SUCCESS then
-        return nil, "TODO: error message"
+    local context = lib.macaroon_deserialize(data, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Deserialize failed"
+        else
+            return nil, "Deserialize failed"
+        end
     end
-    return setmetatable({ context = context }, macaroons)
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons.verifier()
-    return setmetatable({ context = ffi_gc(lib.macaroon_verifier_create(), lib.macaroon_verifier_destroy) }, verifier)
+    local context = lib.macaroon_verifier_create()
+    if context == nil then
+        return nil, "Unable to create verifier"
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_verifier_destroy) }, verifier)
 end
 
 function macaroons:serialize()
     local n = lib.macaroon_serialize_size_hint(self.context)
     local b = ffi_new(char_t, n)
     local s = lib.macaroon_serialize(self.context, b, n, rc)
-    -- TODO: check return code s
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if s ~= 0 then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Serialize failed"
+        else
+            return nil, "Serialize failed"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
     return ffi_str(b)
 end
 
@@ -153,24 +220,70 @@ function macaroons:inspect()
     local n = lib.macaroon_inspect_size_hint(self.context)
     local b = ffi_new(char_t, n)
     local s = lib.macaroon_inspect(self.context, b, n, rc)
-    -- TODO: check return code s
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if s ~= 0 then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Inspect failed"
+        else
+            return nil, "Inspect failed"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
     return ffi_str(b)
 end
 
 function macaroons:add_first_party_caveat(predicate)
-    -- TODO: error checking
-    return setmetatable({ context = ffi_gc(lib.macaroon_add_first_party_caveat(self.context, predicate, #predicate, rc), lib.macaroon_destroy) }, macaroons)
+    local context = lib.macaroon_add_first_party_caveat(self.context, predicate, #predicate, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Unable to add first party caveat"
+        else
+            return nil, "Unable to add first party caveat"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons:add_third_party_caveat(location, key, id)
-    -- TODO: error checking
-    return setmetatable({ context = ffi_gc(lib.macaroon_add_third_party_caveat(self.context, location, #location, key, #key, id, #id, rc), lib.macaroon_destroy) }, macaroons)
-
+    local context = lib.macaroon_add_third_party_caveat(self.context, location, #location, key, #key, id, #id, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Unable to add third party caveat"
+        else
+            return nil, "Unable to add third party caveat"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons:prepare_for_request(d)
-    -- TODO: error checking
-    return setmetatable({ context = ffi_gc(lib.macaroon_prepare_for_request(self.context, d.context, rc), lib.macaroon_destroy) }, macaroons)
+    local context = lib.macaroon_prepare_for_request(self.context, d.context, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Unable to prepare for request"
+        else
+            return nil, "Unable to prepare for request"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
 end
 
 function macaroons:validate()
