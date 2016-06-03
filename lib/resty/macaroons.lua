@@ -6,7 +6,6 @@ local ffi_new      = ffi.new
 local ffi_str      = ffi.string
 local ffi_typeof   = ffi.typeof
 local ffi_cast     = ffi.cast
-local C            = ffi.C
 local select       = select
 local setmetatable = setmetatable
 local tonumber     = tonumber
@@ -57,7 +56,7 @@ local cp = ffi_new "const unsigned char*[1]"
 local ip = ffi_new "const unsigned char*[1]"
 local sz = ffi_new "size_t[1]"
 local iz = ffi_new "size_t[1]"
-local cb = ffi_typeof "int (*)(const unsigned char*, size_t pred_sz)"
+local cb = ffi_typeof "bool (*)(const  char*, size_t pred_sz)"
 local mcrn_t = ffi_typeof "struct macaroon*[?]"
 local char_t = ffi_typeof "char[?]"
 local errors = {}
@@ -70,11 +69,11 @@ errors[lib.MACAROON_BUF_TOO_SMALL]    = "Buffer too small"
 errors[lib.MACAROON_NOT_AUTHORIZED]   = "Not authorized"
 errors[lib.MACAROON_NO_JSON_SUPPORT]  = "No JSON support"
 
+local callback = ffi_cast(cb, function() end)
+
 local function general_check(f, pred, pred_sz)
-    if ffi_cast(cb, f)(pred, pred_sz) == 0 then
-        return -1
-    end
-    return 0
+    local f = ffi_cast(cb, f)
+    return f(pred, pred_sz) and 0 or -1
 end
 
 local verifier = {}
@@ -136,14 +135,15 @@ function verifier:satisfy_exact(predicate)
 end
 
 function verifier:satisfy_general(func)
-    local s = lib.macaroon_verifier_satisfy_general(self.context, general_check, ffi_cast(cb, func), rc)
+    callback:set(func)
+    local s = lib.macaroon_verifier_satisfy_general(self.context, general_check, callback, rc)
     local r = tonumber(rc[0])
     rc[0] = lib.MACAROON_SUCCESS
     if s ~= 0 then
         if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
-            return nil, errors[r] or "Verifier unsatisfied error"
+            return nil, errors[r] or "General verifier unsatisfied error"
         else
-            return nil, "Verifier unsatisfied error"
+            return nil, "General verifier unsatisfied error"
         end
     end
     if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
