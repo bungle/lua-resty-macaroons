@@ -47,7 +47,6 @@ struct macaroon_verifier* macaroon_verifier_create();
                       int macaroon_inspect(const struct macaroon* M, char* data, size_t data_sz, enum macaroon_returncode* err);
          struct macaroon* macaroon_copy(const struct macaroon* M, enum macaroon_returncode* err);
                       int macaroon_cmp(const struct macaroon* M, const struct macaroon* N);
-           typedef void * macaroon_callback;
 ]]
 
 local lib = ffi_load "macaroons"
@@ -69,7 +68,11 @@ errors[lib.MACAROON_BUF_TOO_SMALL]    = "Buffer too small"
 errors[lib.MACAROON_NOT_AUTHORIZED]   = "Not authorized"
 errors[lib.MACAROON_NO_JSON_SUPPORT]  = "No JSON support"
 
-local callback = ffi_cast(cb, function() end)
+local function callback(func)
+    return ffi_cast(cb, function(pred, pred_sz)
+        return func(ffi_str(pred, pred_sz), tonumber(pred_sz))
+    end)
+end
 
 local function general_check(f, pred, pred_sz)
     local f = ffi_cast(cb, f)
@@ -135,8 +138,7 @@ function verifier:satisfy_exact(predicate)
 end
 
 function verifier:satisfy_general(func)
-    callback:set(func)
-    local s = lib.macaroon_verifier_satisfy_general(self.context, general_check, callback, rc)
+    local s = lib.macaroon_verifier_satisfy_general(self.context, general_check, callback(func), rc)
     local r = tonumber(rc[0])
     rc[0] = lib.MACAROON_SUCCESS
     if s ~= 0 then
@@ -155,7 +157,11 @@ end
 local macaroons = {}
 
 function macaroons:__eq(macaroon)
-    return lib.macaroon_cmp(self.context, macaroon.context) == 0
+    return self:compare(macaroon) == 0
+end
+
+function macaroons:compare(macaroon)
+    return lib.macaroon_cmp(self.context, macaroon.context)
 end
 
 function macaroons:__index(k)
