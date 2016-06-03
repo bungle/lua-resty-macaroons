@@ -44,8 +44,8 @@ struct macaroon_verifier* macaroon_verifier_create();
          struct macaroon* macaroon_deserialize(const char* data, enum macaroon_returncode* err);
                    size_t macaroon_inspect_size_hint(const struct macaroon* M);
                       int macaroon_inspect(const struct macaroon* M, char* data, size_t data_sz, enum macaroon_returncode* err);
-// TODO: implement binding: struct macaroon* macaroon_copy(const struct macaroon* M, enum macaroon_returncode* err);
-// TODO: implement binding: int macaroon_cmp(const struct macaroon* M, const struct macaroon* N);
+         struct macaroon* macaroon_copy(const struct macaroon* M, enum macaroon_returncode* err);
+                      int macaroon_cmp(const struct macaroon* M, const struct macaroon* N);
 ]]
 
 local lib = ffi_load "macaroons"
@@ -126,6 +126,10 @@ function verifier:satisfy_exact(predicate)
 end
 
 local macaroons = {}
+
+function macaroons:__eq(macaroon)
+    return lib.macaroon_cmp(self.context, macaroon.context) == 0
+end
 
 function macaroons:__index(k)
     if k == "location" then
@@ -278,6 +282,23 @@ function macaroons:prepare_for_request(d)
             return nil, errors[r] or "Unable to prepare for request"
         else
             return nil, "Unable to prepare for request"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return setmetatable({ context = ffi_gc(context, lib.macaroon_destroy) }, macaroons)
+end
+
+function macaroons:copy()
+    local context = lib.macaroon_copy(self.context, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if context == nil then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Unable to copy macaroon"
+        else
+            return nil, "Unable to copy macaroon"
         end
     end
     if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
