@@ -5,6 +5,8 @@ local ffi_gc       = ffi.gc
 local ffi_new      = ffi.new
 local ffi_str      = ffi.string
 local ffi_typeof   = ffi.typeof
+local ffi_cast     = ffi.cast
+local C            = ffi.C
 local select       = select
 local setmetatable = setmetatable
 local tonumber     = tonumber
@@ -34,7 +36,7 @@ enum macaroon_returncode {
 struct macaroon_verifier* macaroon_verifier_create();
                      void macaroon_verifier_destroy(struct macaroon_verifier* V);
                       int macaroon_verifier_satisfy_exact(struct macaroon_verifier* V, const unsigned char* predicate, size_t predicate_sz, enum macaroon_returncode* err);
-// TODO: implement binding: int macaroon_verifier_satisfy_general(struct macaroon_verifier* V, int (*general_check)(void* f, const unsigned char* pred, size_t pred_sz), void* f, enum macaroon_returncode* err);
+                      int macaroon_verifier_satisfy_general(struct macaroon_verifier* V, int (*general_check)(void* f, const unsigned char* pred, size_t pred_sz), void* f, enum macaroon_returncode* err);
                       int macaroon_verify(const struct macaroon_verifier* V, const struct macaroon* M, const unsigned char* key, size_t key_sz, struct macaroon** MS, size_t MS_sz, enum macaroon_returncode* err);
                      void macaroon_location(const struct macaroon* M, const unsigned char** location, size_t* location_sz);
                      void macaroon_identifier(const struct macaroon* M, const unsigned char** identifier, size_t* identifier_sz);
@@ -46,15 +48,16 @@ struct macaroon_verifier* macaroon_verifier_create();
                       int macaroon_inspect(const struct macaroon* M, char* data, size_t data_sz, enum macaroon_returncode* err);
          struct macaroon* macaroon_copy(const struct macaroon* M, enum macaroon_returncode* err);
                       int macaroon_cmp(const struct macaroon* M, const struct macaroon* N);
+           typedef void * macaroon_callback;
 ]]
 
 local lib = ffi_load "macaroons"
-
 local rc = ffi_new "enum macaroon_returncode[1]"
 local cp = ffi_new "const unsigned char*[1]"
 local ip = ffi_new "const unsigned char*[1]"
 local sz = ffi_new "size_t[1]"
 local iz = ffi_new "size_t[1]"
+local cb = ffi_typeof "int (*)(const unsigned char*, size_t pred_sz)"
 local mcrn_t = ffi_typeof "struct macaroon*[?]"
 local char_t = ffi_typeof "char[?]"
 local errors = {}
@@ -66,6 +69,13 @@ errors[lib.MACAROON_CYCLE]            = "Cycle"
 errors[lib.MACAROON_BUF_TOO_SMALL]    = "Buffer too small"
 errors[lib.MACAROON_NOT_AUTHORIZED]   = "Not authorized"
 errors[lib.MACAROON_NO_JSON_SUPPORT]  = "No JSON support"
+
+local function general_check(f, pred, pred_sz)
+    if ffi_cast(cb, f)(pred, pred_sz) == 0 then
+        return -1
+    end
+    return 0
+end
 
 local verifier = {}
 verifier.__index = verifier
@@ -110,6 +120,23 @@ end
 
 function verifier:satisfy_exact(predicate)
     local s = lib.macaroon_verifier_satisfy_exact(self.context, predicate, #predicate, rc)
+    local r = tonumber(rc[0])
+    rc[0] = lib.MACAROON_SUCCESS
+    if s ~= 0 then
+        if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+            return nil, errors[r] or "Verifier unsatisfied error"
+        else
+            return nil, "Verifier unsatisfied error"
+        end
+    end
+    if r ~= 0 and r ~= lib.MACAROON_SUCCESS then
+        return nil, errors[r] or r
+    end
+    return self
+end
+
+function verifier:satisfy_general(func)
+    local s = lib.macaroon_verifier_satisfy_general(self.context, general_check, ffi_cast(cb, func), rc)
     local r = tonumber(rc[0])
     rc[0] = lib.MACAROON_SUCCESS
     if s ~= 0 then
